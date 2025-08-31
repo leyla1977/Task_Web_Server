@@ -1,42 +1,31 @@
 package ru.netology;
 
-import java.io.BufferedOutputStream;
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class Server {
     private final int port;
-    private final List<String> validPaths;
-    private final ExecutorService threadPool;
+    private final ConcurrentHashMap<String, Handler> handlers = new ConcurrentHashMap<>();
 
-    public Server(int port, List<String> validPaths) {
+    public Server(int port) {
         this.port = port;
-        this.validPaths = validPaths;
-        this.threadPool = Executors.newFixedThreadPool(64);
     }
 
-    public void start() {
+    // Метод регистрации обработчиков
+    public void addHandler(String method, String path, Handler handler) {
+        String key = method + " " + path;
+        handlers.put(key, handler);
+    }
+
+    public void start() throws IOException {
         try (ServerSocket serverSocket = new ServerSocket(port)) {
             System.out.println("Сервер запущен на порту " + port);
             while (true) {
-                try {
-                    Socket socket = serverSocket.accept();
-                    threadPool.submit(() -> handleConnection(socket));
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+                Socket socket = serverSocket.accept();
+                new Thread(() -> handleConnection(socket)).start();
             }
-        } catch (IOException e) {
-            throw new RuntimeException("Ошибка запуска сервера", e);
         }
     }
 
@@ -45,63 +34,29 @@ public class Server {
                 socket;
                 BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
                 BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream())
-        ){
-
-            String requestLine = in.readLine(); // проверка, зашли ли данные
-            if (requestLine == null) return;
-
-            String[] parts = requestLine.split(" "); // запрос кривой — закрываем соединение
-            if (parts.length != 3) return;
-
-            String path = parts[1];
-            if (!validPaths.contains(path)) {
-                out.write((
-                        "HTTP/1.1 404 Not Found\r\n" +
-                                "Content-Length: 0\r\n" +
-                                "Connection: close\r\n" +
-                                "\r\n"
-                ).getBytes());
-                out.flush();
-                return;
+        ) {
+            // Создаём объект Request
+            Request request;
+            try {
+                request = new Request(in);
+            } catch (IOException e) {
+                return; // плохой запрос
             }
 
-            Path filePath = Path.of(".", "public", path);
-            String mimeType = Files.probeContentType(filePath);
+            // Пытаемся найти зарегистрированный обработчик
+            String key = request.getMethod() + " " + request.getPath();
+            Handler handler = handlers.get(key);
 
-            // обрабатываем для classıc
-            if (path.equals("/classic.html")) {
-                String template = Files.readString(filePath);
-                byte[] content = template.replace(
-                        "{time}",
-                        LocalDateTime.now().toString()
-                ).getBytes();
-                out.write((
-                        "HTTP/1.1 200 OK\r\n" +
-                                "Content-Type: " + mimeType + "\r\n" +
-                                "Content-Length: " + content.length + "\r\n" +
-                                "Connection: close\r\n" +
-                                "\r\n"
-                ).getBytes());
-                out.write(content);
+            if (handler != null) {
+                handler.handle(request, out);
+            } else {
+                // 404 Not Found
+                out.write(("HTTP/1.1 404 Not Found\r\n\r\nСтраница не найдена").getBytes());
                 out.flush();
-                return;
             }
 
-           long length = Files.size(filePath);
-            out.write((
-                    "HTTP/1.1 200 OK\r\n" +
-                            "Content-Type: " + mimeType + "\r\n" +
-                            "Content-Length: " + length + "\r\n" +
-                            "Connection: close\r\n" +
-                            "\r\n"
-            ).getBytes());
-            Files.copy(filePath, out);
-            out.flush();
-
-        }  catch (IOException e) {
-        e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
-
-    }
-
 }
