@@ -1,39 +1,34 @@
 package ru.netology;
-
 import java.io.IOException;
 
 public class Main {
-    public static void main(String[] args) {
+    public static void main(String[] args) throws IOException {
         Server server = new Server(9999);
 
-        server.addHandler("GET", "/messages", (request, responseStream) -> {
-            String response = "HTTP/1.1 200 OK\r\n" +
-                    "Content-Type: text/plain\r\n" +
-                    "Content-Length: 7\r\n" +
-                    "Connection: close\r\n" +
-                    "\r\n" +
-                    "Hello!\n";
-            responseStream.write(response.getBytes());
-            responseStream.flush();
+        // Хендлер для GET /messages
+        server.addHandler("GET", "/messages", (request, out) -> {
+            String last = request.getQueryParam("last");
+            String response = "Последних сообщений: " + last;
+            out.write((
+                    "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: text/plain; charset=UTF-8\r\n" +
+                            "\r\n" +
+                            response
+            ).getBytes());
+            out.flush();
         });
 
-        server.addHandler("POST", "/messages", (request, responseStream) -> {
-            String body = request.getBody() == null ? "" : request.getBody();
-            String response = "HTTP/1.1 200 OK\r\n" +
-                    "Content-Type: text/plain\r\n" +
-                    "Content-Length: " + body.length() + "\r\n" +
-                    "Connection: close\r\n" +
-                    "\r\n" +
-                    body;
-            responseStream.write(response.getBytes());
-            responseStream.flush();
+
+        // Хендлер для POST /messages
+        server.addHandler("POST", "/messages", (request, out) -> {
+            String user = request.getPostParam("user");
+            String text = request.getPostParam("text");
+
+            String response = "Пользователь: " + user + ", Текст: " + text;
+            out.write(("HTTP/1.1 200 OK\r\n\r\n" + response).getBytes());
+            out.flush();
         });
 
-        try {
-            server.start();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        server.start();
     }
 }
-

@@ -43,11 +43,13 @@ public class Server {
                 return; // плохой запрос
             }
 
-            // Пытаемся найти зарегистрированный обработчик
-            String key = request.getMethod() + " " + request.getPath();
+            // Используем только путь без Query String для поиска хендлера
+            String pathOnly = request.getPath().split("\\?")[0];
+            String key = request.getMethod() + " " + pathOnly;
             Handler handler = handlers.get(key);
 
             if (handler != null) {
+                // Хендлер может работать с GET-параметрами и POST-параметрами
                 handler.handle(request, out);
             } else {
                 // 404 Not Found
@@ -59,4 +61,5 @@ public class Server {
             e.printStackTrace();
         }
     }
+
 }
