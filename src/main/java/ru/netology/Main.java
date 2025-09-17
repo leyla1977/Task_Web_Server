@@ -1,7 +1,6 @@
 package ru.netology;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 public class Main {
@@ -36,24 +35,32 @@ public class Main {
             out.flush();
         });
 
-        // ---------------- POST (multipart) ----------------
+        // ---------------- POST (multipart/form-data) ----------------
         server.addHandler("POST", "/upload", (request, out) -> {
             StringBuilder response = new StringBuilder();
 
-            // Если есть поле "user"
-            String user = request.getPostParam("user");
-            if (user != null) {
-                response.append("User: ").append(user).append("\n");
+            // Берём поле user
+            Part userPart = request.getPart("user"); //getPart("fieldName") → первый элемент поля/файла
+            if (userPart != null) {
+                response.append("User: ").append(userPart.getValue()).append("\n");
+            } else {
+                response.append("User: (не указан)\n");
             }
 
-            List<Part> photoParts = request.getParts("photos");
-            for (Part part : photoParts) {
-                if (part.isFile()) {
-                    response.append("Uploaded file: ").append(part.getFilename())
-                            .append(" (").append(part.getContent().length).append(" bytes)\n");
-                } else {
-                    response.append("Field: ").append(part.getName()).append(" = ").append(part.getValue()).append("\n");
+            // Берём файлы avatar
+            List<Part> avatarParts = request.getParts("avatar"); // getParts("fieldName") → список всех элементов с одинаковым именем.
+            if (avatarParts != null && !avatarParts.isEmpty()) {
+                for (Part part : avatarParts) {
+                    if (part.isFile()) {  // gроверка, файл это или обычное поле
+                        response.append("Uploaded file: ").append(part.getFilename())
+                                .append(" (").append(part.getContent().length).append(" bytes)\n"); //getContent() → содержимое файла в byte[]
+                    } else {
+                        response.append("Field: ").append(part.getName())
+                                .append(" = ").append(part.getValue()).append("\n");
+                    }
                 }
+            } else {
+                response.append("No files uploaded\n");
             }
 
             out.write((
@@ -63,13 +70,14 @@ public class Main {
             ).getBytes());
             out.flush();
 
-        });
 
+    });
 
         // ---------------- Запуск ----------------
         server.start();
     }
 }
+
 
 
 

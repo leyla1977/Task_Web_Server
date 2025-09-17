@@ -5,6 +5,8 @@ import org.apache.commons.fileupload.disk.DiskFileItemFactory;
 
 
 import java.io.*;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 public class Request {
@@ -12,67 +14,60 @@ public class Request {
     private String path;
     private String protocol;
     private final Map<String, String> headers = new HashMap<>();
-    private final Map<String, List<String>> params = new HashMap<>();     // GET + POST
-    private final Map<String, List<String>> postParams = new HashMap<>(); // только POST form-urlencoded
+    private final Map<String, List<String>> params = new HashMap<>();     // GET + POST (form-urlencoded)
+    private final Map<String, List<String>> postParams = new HashMap<>(); // только POST
     private final Map<String, List<Part>> parts = new HashMap<>();        // multipart
     private String body;
 
     public Request(InputStream inputStream) throws IOException {
         BufferedReader in = new BufferedReader(new InputStreamReader(inputStream));
 
-        // ----- 1. Request line -----
-        String requestLine = in.readLine();
-        if (requestLine == null) return;
-        String[] requestParts = requestLine.split(" ");
-        method = requestParts[0];
-        path = requestParts[1];
-        protocol = requestParts[2];
+        // ----- 1. Стартовая строка -----
+        String startLine = in.readLine();
+        if (startLine == null || startLine.isEmpty()) {
+            throw new IOException("Пустой запрос");
+        }
+        String[] partsLine = startLine.split(" ");
+        method = partsLine[0];
+        String uri = partsLine[1];
+        protocol = partsLine.length > 2 ? partsLine[2] : "";
 
-        // ----- 2. Headers -----
+        // Query string
+        int qIdx = uri.indexOf("?");
+        if (qIdx >= 0) {
+            path = uri.substring(0, qIdx);
+            String query = uri.substring(qIdx + 1);
+            parseParams(query, params);
+        } else {
+            path = uri;
+        }
+
+        // ----- 2. Заголовки -----
         String line;
         while ((line = in.readLine()) != null && !line.isEmpty()) {
             int idx = line.indexOf(":");
-            if (idx != -1) {
+            if (idx > 0) {
                 String name = line.substring(0, idx).trim();
                 String value = line.substring(idx + 1).trim();
                 headers.put(name, value);
             }
         }
 
-        // ----- 3. Query parameters (GET) -----
-        int qIdx = path.indexOf("?");
-        if (qIdx != -1) {
-            parseQueryParams(path.substring(qIdx + 1));
-            path = path.substring(0, qIdx);
-        }
-
-        // ----- 4. Body -----
+        // ----- 3. Тело -----
         String contentLengthHeader = headers.get("Content-Length");
-        String contentType = headers.get("Content-Type");
-
         if (contentLengthHeader != null) {
             int length = Integer.parseInt(contentLengthHeader);
+            char[] buf = new char[length];
+            int read = in.read(buf, 0, length);
+            body = new String(buf, 0, read);
 
-            if (contentType != null && contentType.toLowerCase().startsWith("multipart/")) {
-                // multipart: читаем как байты
-                byte[] bodyBytes = new byte[length];
-                int totalRead = 0;
-                while (totalRead < length) {
-                    int read = inputStream.read(bodyBytes, totalRead, length - totalRead);
-                    if (read == -1) break;
-                    totalRead += read;
-                }
-                parseMultipart(contentType, new ByteArrayInputStream(bodyBytes));
-
-            } else {
-                // form-urlencoded или текст
-                char[] buf = new char[length];
-                int read = in.read(buf, 0, length);
-                body = new String(buf, 0, read);
-
-                if ("application/x-www-form-urlencoded".equalsIgnoreCase(contentType)) {
+            String contentType = headers.get("Content-Type");
+            if (contentType != null) {
+                if (contentType.equalsIgnoreCase("application/x-www-form-urlencoded")) {
                     parseParams(body, postParams);
                     mergeParams(postParams);
+                } else if (contentType.toLowerCase().startsWith("multipart/")) {
+                    parseMultipart(contentType, new ByteArrayInputStream(body.getBytes(StandardCharsets.ISO_8859_1)));
                 }
             }
         } else {
@@ -80,131 +75,101 @@ public class Request {
         }
     }
 
-    // ----------------- Методы работы с параметрами -----------------
+    // ================= Getters =================
 
-    private void parseQueryParams(String query) {
-        String[] pairs = query.split("&");
-        for (String pair : pairs) {
-            String[] kv = pair.split("=", 2);
-            String key = kv[0];
-            String value = kv.length > 1 ? kv[1] : "";
-            params.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
-        }
+    public String getMethod() { return method; }
+    public String getPath() { return path; }
+    public String getProtocol() { return protocol; }
+    public String getHeader(String name) { return headers.get(name); }
+    public String getBody() { return body; }
+
+    // ----- Универсальные параметры (GET+POST form-urlencoded) -----
+    public String getParam(String name) {
+        List<String> values = params.get(name);
+        return (values == null || values.isEmpty()) ? null : values.get(0);
     }
 
-    private void parseParams(String query, Map<String, List<String>> target) {
-        String[] pairs = query.split("&");
+    public List<String> getParams(String name) {
+        return params.getOrDefault(name, List.of());
+    }
+
+    public Map<String, List<String>> getAllParams() {
+        return params;
+    }
+
+    // ----- POST параметры -----
+    public String getPostParam(String name) {
+        List<String> values = postParams.get(name);
+        return (values == null || values.isEmpty()) ? null : values.get(0);
+    }
+
+    public List<String> getPostParams(String name) {
+        return postParams.getOrDefault(name, List.of());
+    }
+
+    public Map<String, List<String>> getPostParams() {
+        return postParams;
+    }
+
+    // ----- Multipart -----
+    public Part getPart(String name) {
+        List<Part> list = parts.get(name);
+        return (list == null || list.isEmpty()) ? null : list.get(0);
+    }
+
+    public List<Part> getParts(String name) {
+        return parts.getOrDefault(name, List.of());
+    }
+
+    public Map<String, List<Part>> getParts() {
+        return parts;
+    }
+
+    // ================= Внутренние методы =================
+
+    private void parseParams(String raw, Map<String, List<String>> target) {
+        if (raw == null || raw.isEmpty()) return;
+        String[] pairs = raw.split("&");
         for (String pair : pairs) {
             String[] kv = pair.split("=", 2);
-            String key = kv[0];
-            String value = kv.length > 1 ? kv[1] : "";
+            String key = URLDecoder.decode(kv[0], StandardCharsets.UTF_8);
+            String value = kv.length > 1 ? URLDecoder.decode(kv[1], StandardCharsets.UTF_8) : "";
             target.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
         }
     }
 
-    private void mergeParams(Map<String, List<String>> postParams) {
-        for (Map.Entry<String, List<String>> entry : postParams.entrySet()) {
-            params.computeIfAbsent(entry.getKey(), k -> new ArrayList<>())
-                    .addAll(entry.getValue());
+    private void mergeParams(Map<String, List<String>> source) {
+        for (var e : source.entrySet()) {
+            params.computeIfAbsent(e.getKey(), k -> new ArrayList<>()).addAll(e.getValue());
         }
     }
 
-    // ----------------- Multipart -----------------
     private void parseMultipart(String contentType, InputStream inputStream) {
         try {
             DiskFileItemFactory factory = new DiskFileItemFactory();
-            FileUpload upload = new FileUpload(factory);
+            FileUpload upload = new FileUpload(factory); // для сокетного сервера
             upload.setHeaderEncoding("UTF-8");
-            System.out.println("parseMultipart start, contentType=" + contentType);
 
-            FileItemIteratorWrapper iter = new FileItemIteratorWrapper(upload, contentType, inputStream, headers);
-            while (iter.hasNext()) {
-                FileItem item = iter.next();
+            // Оборачиваем InputStream и headers
+            InputStreamRequestContext requestContext = new InputStreamRequestContext(contentType, inputStream, headers);
+
+            // Получаем все элементы формы
+            List<FileItem> items = upload.parseRequest(requestContext);
+
+            for (FileItem item : items) {
                 if (item.isFormField()) {
+                    // обычное поле
                     parts.computeIfAbsent(item.getFieldName(), k -> new ArrayList<>())
                             .add(new Part(item.getFieldName(), item.getString("UTF-8")));
                 } else {
+                    // файл
                     parts.computeIfAbsent(item.getFieldName(), k -> new ArrayList<>())
                             .add(new Part(item.getFieldName(), item.getName(), item.get()));
+
                 }
             }
-            System.out.println("parseMultipart done, parts=" + parts.size());
-
         } catch (Exception e) {
             throw new RuntimeException("Ошибка разбора multipart", e);
         }
-    }
-
-    // ----------------- GETTERS -----------------
-    public String getMethod() {
-        return method;
-    }
-
-    public String getPath() {
-        return path;
-    }
-
-    public String getBody() {
-        return body;
-    }
-
-    public String getParam(String name) {
-        List<String> values = params.get(name);
-        return values != null && !values.isEmpty() ? values.get(0) : null;
-    }
-
-    public List<String> getParams(String name) {
-        return params.getOrDefault(name, Collections.emptyList());
-    }
-
-    public String getPostParam(String name) {
-        List<String> values = postParams.get(name);
-        return values != null && !values.isEmpty() ? values.get(0) : null;
-    }
-
-    public List<String> getPostParams(String name) {
-        return postParams.getOrDefault(name, Collections.emptyList());
-    }
-
-    public Part getPart(String name) {
-        List<Part> list = parts.get(name);
-        return list != null && !list.isEmpty() ? list.get(0) : null;
-    }
-
-    public List<Part> getParts(String name) {
-        return parts.getOrDefault(name, Collections.emptyList());
-    }
-}
-
-// ----------------- Вспомогательный wrapper для FileItemIterator -----------------
-class  FileItemIteratorWrapper implements Iterator<FileItem> {
-    private final List<FileItem> items;
-    private int index = 0;
-
-    public FileItemIteratorWrapper(FileUpload upload, String contentType, InputStream inputStream, Map<String,String> headers) throws Exception {
-        RequestContext context = new RequestContext() {
-            @Override
-            public String getCharacterEncoding() { return "UTF-8"; }
-            @Override
-            public String getContentType() { return contentType; }
-            @Override
-            public int getContentLength() {
-                String cl = headers.get("Content-Length");
-                return cl == null ? -1 : Integer.parseInt(cl);
-            }
-            @Override
-            public InputStream getInputStream() { return inputStream; }
-        };
-        items = upload.parseRequest(context);
-    }
-
-    @Override
-    public boolean hasNext() {
-        return index < items.size();
-    }
-
-    @Override
-    public FileItem next() {
-        return items.get(index++);
     }
 }
