@@ -3,60 +3,71 @@ package ru.netology;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.concurrent.ConcurrentHashMap;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 
 public class Server {
     private final int port;
-    private final ConcurrentHashMap<String, Handler> handlers = new ConcurrentHashMap<>();
+    private final Map<String, Handler> handlers = new HashMap<>();
 
     public Server(int port) {
         this.port = port;
     }
 
-    // Метод регистрации обработчиков
-    public void addHandler(String method, String path, Handler handler) {
-        String key = method + " " + path;
-        handlers.put(key, handler);
-    }
-
-    public void start() throws IOException {
+    public void start() {
         try (ServerSocket serverSocket = new ServerSocket(port)) {
             System.out.println("Сервер запущен на порту " + port);
+
             while (true) {
                 Socket socket = serverSocket.accept();
-                new Thread(() -> handleConnection(socket)).start();
+                new Thread(() -> handle(socket)).start();
             }
+        } catch (IOException e) {
+            e.printStackTrace();
         }
     }
 
-    private void handleConnection(Socket socket) {
+    private void handle(Socket socket) {
         try (
                 socket;
-                BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                InputStream in = socket.getInputStream();
                 BufferedOutputStream out = new BufferedOutputStream(socket.getOutputStream())
         ) {
-            // Создаём объект Request
-            Request request;
-            try {
-                request = new Request(in);
-            } catch (IOException e) {
-                return; // плохой запрос
-            }
+            // --- Создаём Request ---
+            Request request = new Request(socket.getInputStream());
 
-            // Пытаемся найти зарегистрированный обработчик
+
+
+
+            // --- Находим обработчик ---
             String key = request.getMethod() + " " + request.getPath();
             Handler handler = handlers.get(key);
 
             if (handler != null) {
                 handler.handle(request, out);
             } else {
-                // 404 Not Found
-                out.write(("HTTP/1.1 404 Not Found\r\n\r\nСтраница не найдена").getBytes());
+                out.write((
+                        "HTTP/1.1 404 Not Found\r\n" +
+                                "Content-Type: text/plain; charset=UTF-8\r\n" +
+                                "\r\n" +
+                                "Страница не найдена"
+                ).getBytes(StandardCharsets.UTF_8));
                 out.flush();
             }
 
         } catch (IOException e) {
             e.printStackTrace();
         }
+    }
+
+    public void addHandler(String method, String path, Handler handler) {
+        String key = method + " " + path;
+        handlers.put(key, handler);
+    }
+
+    @FunctionalInterface
+    public interface Handler {
+        void handle(Request request, BufferedOutputStream responseStream) throws IOException;
     }
 }
