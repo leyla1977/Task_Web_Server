@@ -118,7 +118,4 @@ if (contentLengthHeader != null) {
 
 
 
-echo "Test file 2" > C:\Work\Java\Task_Web_Server\file2.txt
-curl -v -X POST http://localhost:9999/upload \
-  -F "photos=@C:/Work/Java/Task_Web_Server/file.txt" \
-  -F "photos=@C:/Work/Java/Task_Web_Server/file2.txt"
+
